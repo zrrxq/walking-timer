@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interval Walking Timer</title>
+    <style>
+        :root {
+            --bg-color: #fdf6e3;
+            --text-color: #2c3e50;
+            --fast-color: #ff7675;
+            --slow-color: #55efc4;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            text-align: center;
+            transition: background-color 0.5s ease;
+        }
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 20px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+            max-width: 400px;
+            width: 90%;
+        }
+        h1 { margin-top: 0; font-size: 1.5rem; color: #636e72; }
+        #phase {
+            font-size: 2rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin: 10px 0;
+            letter-spacing: 2px;
+            transition: color 0.3s;
+        }
+        #timer {
+            font-size: 5rem;
+            font-weight: bold;
+            margin: 20px 0;
+            font-variant-numeric: tabular-nums;
+        }
+        #set-counter { font-size: 1.2rem; margin-bottom: 20px; color: #636e72; }
+        #step-counter {
+            font-size: 1.5rem;
+            background: #f1f2f6;
+            padding: 10px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .footstep {
+            display: inline-block;
+            transition: transform 0.1s;
+        }
+        .step-pulse {
+            transform: scale(1.3);
+        }
+        #cheer-message {
+            min-height: 1.5rem;
+            font-style: italic;
+            color: #e17055;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+        }
+        .controls button {
+            background: #74b9ff;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 1.1rem;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.1s, filter 0.2s;
+            flex: 1 1 40%;
+        }
+        .controls button:active { transform: scale(0.95); }
+        .controls button:hover { filter: brightness(1.1); }
+        #reset-btn { background: #b2bec3; }
+        #sound-btn { background: #a29bfe; }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="app-container">
+        <h1>Interval Walking</h1>
+        <div id="set-counter">Set 1 of 5</div>
+        <div id="phase">Ready</div>
+        <div id="timer">03:00</div>
+        
+        <div id="step-counter">
+            <span class="footstep" id="foot-icon">👟</span> 
+            <div><span id="steps">0</span> / 4000</div>
+        </div>
+        
+        <div id="cheer-message">Let's get moving!</div>
+        
+        <div class="controls">
+            <button id="start-btn">Start</button>
+            <button id="reset-btn">Reset</button>
+            <button id="sound-btn">🔊 Sound: ON</button>
+        </div>
+    </div>
+
+    <script>
+        // Settings
+        const WORKOUT_PHASES = 10; 
+        const PHASE_DURATION = 180; 
+        
+        // New Paces for ~4000 total steps
+        const SLOW_BPM = 110; 
+        const FAST_BPM = 157; 
+
+        const cheers = [
+            "You got this, Jiji!",
+            "Keep up the rhythm!",
+            "Ganbatte!",
+            "Breathe in, breathe out.",
+            "Great pace!",
+            "Almost there, keep pushing!",
+            "Feel the energy!",
+            "Looking good, Jiji!"
+        ];
+
+        let currentPhaseIndex = 0; 
+        let timeLeft = PHASE_DURATION;
+        let isRunning = false;
+        let timerIntervalId = null;
+        let stepTimeoutId = null;
+        let actualSteps = 0;
+        let isMuted = false;
+        
+        let audioCtx;
+
+        const timerEl = document.getElementById('timer');
+        const phaseEl = document.getElementById('phase');
+        const setEl = document.getElementById('set-counter');
+        const stepsEl = document.getElementById('steps');
+        const cheerEl = document.getElementById('cheer-message');
+        const startBtn = document.getElementById('start-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const soundBtn = document.getElementById('sound-btn');
+        const footIcon = document.getElementById('foot-icon');
+        const appContainer = document.getElementById('app-container');
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        // Metronome step sound (short "tock")
+        function playStepSound() {
+            if (!audioCtx || isMuted) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime); 
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+            
+            gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.05);
+        }
+
+        // Phase change alert
+        function playPhaseChangeSound() {
+            if (!audioCtx) return;
+            const playTone = (freq, timeOffset) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(audioCtx.currentTime + timeOffset);
+                gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + timeOffset + 0.5);
+                osc.stop(audioCtx.currentTime + timeOffset + 0.5);
+            };
+            playTone(600, 0);
+            playTone(800, 0.2);
+        }
+
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+            const s = (seconds % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+
+        function updateUI() {
+            timerEl.textContent = formatTime(timeLeft);
+            stepsEl.textContent = actualSteps;
+            
+            const currentSet = Math.floor(currentPhaseIndex / 2) + 1;
+            
+            if (currentPhaseIndex >= WORKOUT_PHASES) {
+                phaseEl.textContent = "Finished!";
+                setEl.textContent = "Workout Complete";
+                cheerEl.textContent = "Otsukaresama deshita, Jiji! Amazing job!";
+                return;
+            }
+
+            setEl.textContent = `Set ${currentSet} of 5`;
+            
+            const isFastPhase = currentPhaseIndex % 2 === 0;
+            if (isFastPhase) {
+                phaseEl.textContent = "Fast Pace";
+                phaseEl.style.color = "var(--fast-color)";
+            } else {
+                phaseEl.textContent = "Slow Pace";
+                phaseEl.style.color = "var(--slow-color)";
+            }
+        }
+
+        // The Metronome Loop
+        function scheduleNextStep() {
+            if (!isRunning || currentPhaseIndex >= WORKOUT_PHASES) return;
+
+            const isFastPhase = currentPhaseIndex % 2 === 0;
+            const currentBPM = isFastPhase ? FAST_BPM : SLOW_BPM;
+            const msPerStep = 60000 / currentBPM;
+
+            actualSteps++;
+            playStepSound();
+            stepsEl.textContent = actualSteps;
+
+            // Visual bounce effect
+            footIcon.classList.add('step-pulse');
+            setTimeout(() => footIcon.classList.remove('step-pulse'), 100);
+
+            stepTimeoutId = setTimeout(scheduleNextStep, msPerStep);
+        }
+
+        // The Clock Loop
+        function tickClock() {
+            if (timeLeft > 0) {
+                timeLeft--;
+                
+                // Random cheer logic
+                if (Math.random() < 0.05 && timeLeft % 5 === 0) {
+                    cheerEl.textContent = cheers[Math.floor(Math.random() * cheers.length)];
+                }
+                updateUI();
+            } else {
+                currentPhaseIndex++;
+                if (currentPhaseIndex < WORKOUT_PHASES) {
+                    timeLeft = PHASE_DURATION;
+                    playPhaseChangeSound();
+                    updateUI();
+                } else {
+                    stopTimer();
+                    updateUI();
+                }
+            }
+        }
+
+        function startTimer() {
+            initAudio(); 
+            if (!isRunning && currentPhaseIndex < WORKOUT_PHASES) {
+                isRunning = true;
+                startBtn.textContent = "Pause";
+                timerIntervalId = setInterval(tickClock, 1000);
+                scheduleNextStep(); // Kick off the metronome
+            } else if (isRunning) {
+                stopTimer();
+            }
+        }
+
+        function stopTimer() {
+            isRunning = false;
+            startBtn.textContent = "Resume";
+            clearInterval(timerIntervalId);
+            clearTimeout(stepTimeoutId);
+        }
+
+        function resetTimer() {
+            stopTimer();
+            currentPhaseIndex = 0;
+            timeLeft = PHASE_DURATION;
+            actualSteps = 0;
+            startBtn.textContent = "Start";
+            cheerEl.textContent = "Let's get moving!";
+            phaseEl.style.color = "inherit";
+            updateUI();
+            phaseEl.textContent = "Ready";
+        }
+
+        soundBtn.addEventListener('click', () => {
+            initAudio();
+            isMuted = !isMuted;
+            soundBtn.textContent = isMuted ? "🔇 Sound: OFF" : "🔊 Sound: ON";
+            soundBtn.style.background = isMuted ? "#b2bec3" : "#a29bfe";
+        });
+
+        startBtn.addEventListener('click', startTimer);
+        resetBtn.addEventListener('click', resetTimer);
+        
+        updateUI(); 
+        phaseEl.textContent = "Ready";
+    </script>
+</body>
+</html>
